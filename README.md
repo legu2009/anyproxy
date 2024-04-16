@@ -1,30 +1,37 @@
 AnyProxy
+forked from [httpsalibaba/anyproxy](https://github.com/alibaba/anyproxy) v4.1.3
 ----------------
 
-[![NPM version][npm-image]][npm-url]
-[![node version][node-image]][node-url]
-[![npm download][download-image]][download-url]
-[![Build Status](https://travis-ci.org/alibaba/anyproxy.svg?branch=master)](https://travis-ci.org/alibaba/anyproxy)
+用了一些代理工具，感觉还是自己写逻辑控制的比较自由。
 
-[npm-image]: https://img.shields.io/npm/v/anyproxy.svg?style=flat-square
-[npm-url]: https://npmjs.org/package/anyproxy
-[node-image]: https://img.shields.io/badge/node.js-%3E=_6.0.0-green.svg?style=flat-square
-[node-url]: http://nodejs.org/download/
-[download-image]: https://img.shields.io/npm/dm/anyproxy.svg?style=flat-square
-[download-url]: https://npmjs.org/package/anyproxy
+使用代理进行开发的时候，会发现请求变慢了很多，主要是代理需要实现修改请求体，响应体，所有会把数据都进行接收
 
-AnyProxy is A fully configurable HTTP/HTTPS proxy in NodeJS.
+本项目增加一些配置，可以支持请求流式，响应流式
 
-Home page : [AnyProxy.io](http://anyproxy.io)
+## 安装
 
-Issue: https://github.com/alibaba/anyproxy/issues
-
-AnyProxy是一个基于NodeJS的，可供插件配置的HTTP/HTTPS代理服务器。
-
-主页：[AnyProxy.io](http://anyproxy.io)，访问可能需要稳定的国际网络环境
-
-![](https://gw.alipayobjects.com/zos/rmsportal/gUfcjGxLONndTfllxynC.jpg@_90q)
-
-----------------
-
-Legacy doc of version 3.x : https://github.com/alibaba/anyproxy/wiki/3.x-docs
+```js
+{
+    summary: "a rule to hack response",
+    *beforeDealHttpsRequest({ host, _req }) {
+      //return false 不转发（host 域名端口）
+      return true;
+    },
+    *beforeFetchReqData(requestDetail) {
+      //return false 不修改请求内容，默认返回true
+      return false;
+    },
+    beforeWsClient(wsReqInfo) {
+      //ws的修改，一般没用，转发主要是 noWsHeaders.origin
+      return wsReqInfo;
+    },
+    *beforeSendRequest(requestDetail) {
+      return {
+        _directlyRemoteResponse: true //增加属性，true 使用远程返回内容, false 可以在 beforeSendResponse 中修改
+      };
+    },
+    *beforeSendResponse(requestDetail, responseDetail) {
+      return responseDetail;
+    },
+  }
+```
