@@ -8,7 +8,7 @@ forked from [httpsalibaba/anyproxy](https://github.com/alibaba/anyproxy) v4.1.3
 
 本项目增加一些配置，可以支持请求流式，响应流式
 
-## 安装
+## 配置
 
 ```js
 {
@@ -35,3 +35,23 @@ forked from [httpsalibaba/anyproxy](https://github.com/alibaba/anyproxy) v4.1.3
     },
   }
 ```
+
+增加代码路径配置，可以通过访问代理服务接口[/__anyproxy/user_rule]()，刷新配置
+主要是发现socket代理服务 node-dev重启有问题
+
+```
+ruleFilePath: './rule.js',
+```
+没尝试下面方式
+```js
+process.on('SIGINT', () => {
+    try {
+      proxyServer && proxyServer.close();
+    } catch (e) {
+      console.error(e);
+    }
+    process.exit();
+});
+```
+
+增加一些util方式，支持whistle配置

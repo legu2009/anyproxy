@@ -9,6 +9,7 @@ const http = require('http'),
   logUtil = require('./lib/log'),
   util = require('./lib/util'),
   events = require('events'),
+  path = require('path'),
   co = require('co'),
   WebInterface = require('./lib/webInterface'),
   wsServerMgr = require('./lib/wsServerMgr'),
@@ -75,7 +76,13 @@ class ProxyCore extends events.EventEmitter {
     this.requestHandler = null;
 
     // copy the rule to keep the original proxyRule independent
-    this.proxyRule = config.rule || {};
+    if (config.ruleFilePath) {
+      const ruleFilePath = path.resolve(process.cwd(), config.ruleFilePath);
+      config.ruleFilePath = ruleFilePath;
+      this.proxyRule = util.freshRequire(ruleFilePath);
+    } else {
+      this.proxyRule = config.rule || {};
+    }
 
     if (config.silent) {
       logUtil.setPrintStatus(false);
@@ -99,6 +106,7 @@ class ProxyCore extends events.EventEmitter {
       wsIntercept: config.wsIntercept,
       httpServerPort: config.port, // the http server port for http proxy
       forceProxyHttps: !!config.forceProxyHttps,
+      ruleFilePath: config.ruleFilePath,
       dangerouslyIgnoreUnauthorized: !!config.dangerouslyIgnoreUnauthorized
     }, this.proxyRule, this.recorder);
   }
@@ -164,7 +172,6 @@ class ProxyCore extends events.EventEmitter {
         //handle CONNECT request for https over http
         function (callback) {
           self.httpProxyServer.on('connect', self.requestHandler.connectReqHandler);
-
           callback(null);
         },
 
@@ -201,7 +208,7 @@ class ProxyCore extends events.EventEmitter {
           let ruleSummaryString = '';
           const ruleSummary = this.proxyRule.summary;
           if (ruleSummary) {
-            co(function *() {
+            co(function* () {
               if (typeof ruleSummary === 'string') {
                 ruleSummaryString = ruleSummary;
               } else {
@@ -318,7 +325,7 @@ class ProxyServer extends ProxyCore {
       this.webServerInstance = new WebInterface(this.proxyWebinterfaceConfig, this.recorder);
       // start web server
       this.webServerInstance.start()
-      // start proxy core
+        // start proxy core
         .then(() => {
           super.start();
         })
