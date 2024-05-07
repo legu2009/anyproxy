@@ -107,7 +107,8 @@ class ProxyCore extends events.EventEmitter {
       httpServerPort: config.port, // the http server port for http proxy
       forceProxyHttps: !!config.forceProxyHttps,
       ruleFilePath: config.ruleFilePath,
-      dangerouslyIgnoreUnauthorized: !!config.dangerouslyIgnoreUnauthorized
+      dangerouslyIgnoreUnauthorized: !!config.dangerouslyIgnoreUnauthorized,
+      _proxyServer: this
     }, this.proxyRule, this.recorder);
   }
 
