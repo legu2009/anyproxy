@@ -2,53 +2,53 @@
 
 'use strict';
 
-const program = require('commander'),
-  color = require('colorful'),
-  co = require('co'),
-  packageInfo = require('../package.json'),
-  util = require('../lib/util'),
-  rootCACheck = require('./rootCACheck'),
-  startServer = require('./startServer'),
-  logUtil = require('../lib/log');
+const { program } = require('commander');
+const chalk = require('chalk');
+const { clearCerts, generateRootCA } = require('../src/certMgr');
+const util = require('../src/util');
+const rootCACheck = require('./rootCACheck');
+const startServer = require('./startServer');
+const logUtil = require('../src/log');
+const packageInfo = require('../package.json');
 
-program
-  .version(packageInfo.version)
-  .option('-p, --port [value]', 'proxy port, 8001 for default')
-  .option('-w, --web [value]', 'web GUI port, 8002 for default')
-  .option('-r, --rule [value]', 'path for rule file,')
-  .option('-l, --throttle [value]', 'throttle speed in kb/s (kbyte / sec)')
-  .option('-i, --intercept', 'intercept(decrypt) https requests when root CA exists')
-  .option('-s, --silent', 'do not print anything into terminal')
-  .option('-c, --clear', 'clear all the certificates and temp files')
-  .option('--ws-intercept', 'intercept websocket')
-  .option('--ignore-unauthorized-ssl', 'ignore all ssl error')
-  .parse(process.argv);
+async function main() {
 
-if (program.clear) {
-  require('../lib/certMgr').clearCerts(() => {
-    util.deleteFolderContentsRecursive(util.getAnyProxyTmpPath());
-    console.log(color.green('done !'));
-    process.exit(0);
-  });
-} else if (program.root) {
-  require('../lib/certMgr').generateRootCA(() => {
-    process.exit(0);
-  });
-} else {
-  co(function *() {
-    if (program.silent) {
-      logUtil.setPrintStatus(false);
+    program
+        .version(packageInfo.version)
+        .option('-p, --port [value]', '代理端口，默认为8001')
+        .option('-r, --rule [value]', '规则文件路径')
+        .option('-l, --throttle [value]', '限制速度，单位为kb/s（千字节/秒）')
+        .option('-s, --silent', '不在终端打印任何内容')
+        .option('-c, --clear', '清除所有证书和临时文件')
+        .option('-ca, --root', '生成证书')
+        .option('--ignore-unauthorized-ssl', '忽略所有SSL错误')
+        .parse(process.argv);
+
+    const options = program.opts();
+
+    if (options.clear) {
+        await clearCerts();
+        await util.deleteFolderContentsRecursive(util.getAnyProxyTmpPath());
+        console.log(chalk.green('证书清空完成！'));
+        process.exit(0);
+    } else if (options.root) {
+        await generateRootCA();
+        process.exit(0);
+    } else {
+        if (options.silent) {
+            logUtil.setPrintStatus(false);
+        }
+        try {
+            await rootCACheck();
+        } catch (e) {
+            console.error(e);
+        }
+        startServer(options);
     }
-
-    if (program.intercept) {
-      try {
-        yield rootCACheck();
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    return startServer(program);
-  })
 }
 
+try {
+    main();
+} catch (e) {
+    console.error(e);
+}

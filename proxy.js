@@ -1,371 +1,286 @@
 'use strict';
 
-const http = require('http'),
-  https = require('https'),
-  async = require('async'),
-  color = require('colorful'),
-  certMgr = require('./lib/certMgr'),
-  Recorder = require('./lib/recorder'),
-  logUtil = require('./lib/log'),
-  util = require('./lib/util'),
-  events = require('events'),
-  path = require('path'),
-  co = require('co'),
-  WebInterface = require('./lib/webInterface'),
-  wsServerMgr = require('./lib/wsServerMgr'),
-  ThrottleGroup = require('stream-throttle').ThrottleGroup;
+const http = require('http');
+const https = require('https');
+const chalk = require('chalk');
+const events = require('events');
+const path = require('path');
+const certMgr = require('./src/certMgr');
+const logUtil = require('./src/log');
+const util = require('./src/util');
+const Recorder = require('./src/recorder');
+const RequestHandler = require('./src/requestHandler');
+const { ThrottleGroup } = require('stream-throttle');
+const default_rule = require('./src/rule_default');
 
-const T_TYPE_HTTP = 'http',
-  T_TYPE_HTTPS = 'https',
-  DEFAULT_TYPE = T_TYPE_HTTP;
 
-const PROXY_STATUS_INIT = 'INIT';
-const PROXY_STATUS_READY = 'READY';
-const PROXY_STATUS_CLOSED = 'CLOSED';
+const T_TYPE_HTTP = 'http';
+const T_TYPE_HTTPS = 'https';
+const DEFAULT_TYPE = T_TYPE_HTTP;
 
+const PROXY_STATUS = {
+    INIT: 'INIT',
+    READY: 'READY',
+    CLOSED: 'CLOSED'
+};
 /**
- *
- * @class ProxyCore
- * @extends {events.EventEmitter}
+ * 代理核心类
  */
 class ProxyCore extends events.EventEmitter {
-  /**
-   * Creates an instance of ProxyCore.
-   *
-   * @param {object} config - configs
-   * @param {number} config.port - port of the proxy server
-   * @param {object} [config.rule=null] - rule module to use
-   * @param {string} [config.type=http] - type of the proxy server, could be 'http' or 'https'
-   * @param {strign} [config.hostname=localhost] - host name of the proxy server, required when this is an https proxy
-   * @param {number} [config.throttle] - speed limit in kb/s
-   * @param {boolean} [config.forceProxyHttps=false] - if proxy all https requests
-   * @param {boolean} [config.silent=false] - if keep the console silent
-   * @param {boolean} [config.dangerouslyIgnoreUnauthorized=false] - if ignore unauthorized server response
-   * @param {object} [config.recorder] - recorder to use
-   * @param {boolean} [config.wsIntercept] - whether intercept websocket
-   *
-   * @memberOf ProxyCore
-   */
-  constructor(config) {
-    super();
-    config = config || {};
 
-    this.status = PROXY_STATUS_INIT;
-    this.proxyPort = config.port;
-    this.proxyType = /https/i.test(config.type || DEFAULT_TYPE) ? T_TYPE_HTTPS : T_TYPE_HTTP;
-    this.proxyHostName = config.hostname || 'localhost';
-    this.recorder = config.recorder;
-
-    if (parseInt(process.versions.node.split('.')[0], 10) < 4) {
-      throw new Error('node.js >= v4.x is required for anyproxy');
-    } else if (config.forceProxyHttps && !certMgr.ifRootCAFileExists()) {
-      logUtil.printLog('You can run `anyproxy-ca` to generate one root CA and then re-run this command');
-      throw new Error('root CA not found. Please run `anyproxy-ca` to generate one first.');
-    } else if (this.proxyType === T_TYPE_HTTPS && !config.hostname) {
-      throw new Error('hostname is required in https proxy');
-    } else if (!this.proxyPort) {
-      throw new Error('proxy port is required');
-    } else if (!this.recorder) {
-      throw new Error('recorder is required');
-    } else if (config.forceProxyHttps && config.rule && config.rule.beforeDealHttpsRequest) {
-      logUtil.printLog('both "-i(--intercept)" and rule.beforeDealHttpsRequest are specified, the "-i" option will be ignored.', logUtil.T_WARN);
-      config.forceProxyHttps = false;
+    constructor(config = {}) {
+        super();
+        this.initConfig(config);
+        this.initComponents(config);
     }
 
-    this.httpProxyServer = null;
-    this.requestHandler = null;
-
-    // copy the rule to keep the original proxyRule independent
-    if (config.ruleFilePath) {
-      const ruleFilePath = path.resolve(process.cwd(), config.ruleFilePath);
-      config.ruleFilePath = ruleFilePath;
-      this.proxyRule = util.freshRequire(ruleFilePath);
-    } else {
-      this.proxyRule = config.rule || {};
+    /**
+     * 初始化配置
+     */
+    initConfig(config) {
+        this.status = PROXY_STATUS.INIT;
+        this.proxyPort = config.port;
+        this.proxyType = /https/i.test(config.type || DEFAULT_TYPE) ? T_TYPE_HTTPS : T_TYPE_HTTP;
+        this.proxyHostName = config.hostname || 'localhost';
+        this.recorder = config.recorder;
+        this.validateConfig(config);
     }
 
-    if (config.silent) {
-      logUtil.setPrintStatus(false);
+    /**
+     * 验证配置
+     */
+    validateConfig(config) {
+        if (!certMgr.ifRootCAFileExists()) {
+            logUtil.printLog('您可以运行 `anyproxy-ca` 生成一个根CA，然后重新运行此命令');
+            throw new Error('未找到根CA。请先运行 `anyproxy-ca` 生成一个。');
+        }
+        if (this.proxyType === T_TYPE_HTTPS && !config.hostname) {
+            throw new Error('https代理需要指定hostname');
+        }
+        if (!this.proxyPort) {
+            throw new Error('需要指定代理端口');
+        }
+        if (!this.recorder) {
+            throw new Error('需要指定recorder');
+        }
+
     }
 
-    if (config.throttle) {
-      logUtil.printLog('throttle :' + config.throttle + 'kb/s');
-      const rate = parseInt(config.throttle, 10);
-      if (rate < 1) {
-        throw new Error('Invalid throttle rate value, should be positive integer');
-      }
-      global._throttle = new ThrottleGroup({ rate: 1024 * rate }); // rate - byte/sec
+    /**
+     * 初始化组件
+     */
+    initComponents(config) {
+        if (config.silent) {
+            logUtil.setPrintStatus(false);
+        }
+        this.recorder = config.recorder;
+        this.initProxyRule(config);
+        this.initThrottle(config);
+        this.initRequestHandler(config);
     }
 
-    // init recorder
-    this.recorder = config.recorder;
-
-    // init request handler
-    const RequestHandler = util.freshRequire('./requestHandler');
-    this.requestHandler = new RequestHandler({
-      wsIntercept: config.wsIntercept,
-      httpServerPort: config.port, // the http server port for http proxy
-      forceProxyHttps: !!config.forceProxyHttps,
-      ruleFilePath: config.ruleFilePath,
-      dangerouslyIgnoreUnauthorized: !!config.dangerouslyIgnoreUnauthorized,
-      _proxyServer: this
-    }, this.proxyRule, this.recorder);
-  }
-
-  /**
-  * manage all created socket
-  * for each new socket, we put them to a map;
-  * if the socket is closed itself, we remove it from the map
-  * when the `close` method is called, we'll close the sockes before the server closed
-  *
-  * @param {Socket} the http socket that is creating
-  * @returns undefined
-  * @memberOf ProxyCore
-  */
-  handleExistConnections(socket) {
-    const self = this;
-    self.socketIndex++;
-    const key = `socketIndex_${self.socketIndex}`;
-    self.socketPool[key] = socket;
-
-    // if the socket is closed already, removed it from pool
-    socket.on('close', () => {
-      delete self.socketPool[key];
-    });
-  }
-  /**
-   * start the proxy server
-   *
-   * @returns ProxyCore
-   *
-   * @memberOf ProxyCore
-   */
-  start() {
-    const self = this;
-    self.socketIndex = 0;
-    self.socketPool = {};
-
-    if (self.status !== PROXY_STATUS_INIT) {
-      throw new Error('server status is not PROXY_STATUS_INIT, can not run start()');
-    }
-    async.series(
-      [
-        //creat proxy server
-        function (callback) {
-          if (self.proxyType === T_TYPE_HTTPS) {
-            certMgr.getCertificate(self.proxyHostName, (err, keyContent, crtContent) => {
-              if (err) {
-                callback(err);
-              } else {
-                self.httpProxyServer = https.createServer({
-                  key: keyContent,
-                  cert: crtContent
-                }, self.requestHandler.userRequestHandler);
-                callback(null);
-              }
-            });
-          } else {
-            self.httpProxyServer = http.createServer(self.requestHandler.userRequestHandler);
-            callback(null);
-          }
-        },
-
-        //handle CONNECT request for https over http
-        function (callback) {
-          self.httpProxyServer.on('connect', self.requestHandler.connectReqHandler);
-          callback(null);
-        },
-
-        function (callback) {
-          wsServerMgr.getWsServer({
-            server: self.httpProxyServer,
-            connHandler: self.requestHandler.wsHandler
-          });
-          // remember all sockets, so we can destory them when call the method 'close';
-          self.httpProxyServer.on('connection', (socket) => {
-            self.handleExistConnections.call(self, socket);
-          });
-          callback(null);
-        },
-
-        //start proxy server
-        function (callback) {
-          self.httpProxyServer.listen(self.proxyPort);
-          callback(null);
-        },
-      ],
-
-      //final callback
-      (err, result) => {
-        if (!err) {
-          const tipText = (self.proxyType === T_TYPE_HTTP ? 'Http' : 'Https') + ' proxy started on port ' + self.proxyPort;
-          logUtil.printLog(color.green(tipText));
-
-          if (self.webServerInstance) {
-            const webTip = 'web interface started on port ' + self.webServerInstance.webPort;
-            logUtil.printLog(color.green(webTip));
-          }
-
-          let ruleSummaryString = '';
-          const ruleSummary = this.proxyRule.summary;
-          if (ruleSummary) {
-            co(function* () {
-              if (typeof ruleSummary === 'string') {
-                ruleSummaryString = ruleSummary;
-              } else {
-                ruleSummaryString = yield ruleSummary();
-              }
-
-              logUtil.printLog(color.green(`Active rule is: ${ruleSummaryString}`));
-            });
-          }
-
-          self.status = PROXY_STATUS_READY;
-          self.emit('ready');
+    /**
+     * 初始化代理规则
+     */
+    initProxyRule(config) {
+        let rule = {};
+        if (config.ruleFilePath) {
+            const ruleFilePath = path.resolve(process.cwd(), config.ruleFilePath);
+            config.ruleFilePath = ruleFilePath;
+            rule = util.freshRequire(ruleFilePath);
         } else {
-          const tipText = 'err when start proxy server :(';
-          logUtil.printLog(color.red(tipText), logUtil.T_ERR);
-          logUtil.printLog(err, logUtil.T_ERR);
-          self.emit('error', {
-            error: err
-          });
+            rule = config.rule || {};
         }
-      }
-    );
+        this.proxyRule = util.merge(default_rule, rule);
+    }
 
-    return self;
-  }
+    reloadProxyRule() {
+        if (this.config.ruleFilePath) {
+            this.proxyRule = util.merge(default_rule, util.freshRequire(this.config.ruleFilePath));
+        }
+    }
 
-  /**
-   * close the proxy server
-   *
-   * @returns ProxyCore
-   *
-   * @memberOf ProxyCore
-   */
-  close() {
-    // clear recorder cache
-    return new Promise((resolve) => {
-      if (this.httpProxyServer) {
-        // destroy conns & cltSockets when closing proxy server
-        for (const connItem of this.requestHandler.conns) {
-          const key = connItem[0];
-          const conn = connItem[1];
-          logUtil.printLog(`destorying https connection : ${key}`);
-          conn.end();
+    /**
+     * 初始化限速
+     */
+    initThrottle(config) {
+        if (config.throttle) {
+            logUtil.printLog(`限速：${config.throttle}kb/s`);
+            const rate = parseInt(config.throttle, 10);
+            if (rate < 1) {
+                throw new Error('无效的限速值，应为正整数');
+            }
+            this._throttle = new ThrottleGroup({ rate: 1024 * rate });
+        }
+    }
+
+    /**
+     * 初始化请求处理器
+     */
+    initRequestHandler(config) {
+        this.requestHandler = new RequestHandler({
+            wsIntercept: config.wsIntercept,
+            httpServerPort: config.port,
+            dangerouslyIgnoreUnauthorized: !!config.dangerouslyIgnoreUnauthorized
+        }, this);
+    }
+
+    /**
+    * 管理所有创建的socket
+    * 对于每个新socket，我们将其放入一个map中；
+    * 如果socket自行关闭，我们从map中移除它
+    * 当调用`close`方法时，我们会在服务器关闭前关闭这些socket
+    *
+    * @param {Socket} 正在创建的http socket
+    * @returns undefined
+    * @memberOf ProxyCore
+    */
+    handleExistConnections(socket) {
+        const key = `socketIndex_${this.socketIndex++}`;
+        this.socketPool[key] = socket;
+        // 如果socket已关闭，从池中移除
+        socket.on('close', () => {
+            delete this.socketPool[key];
+        });
+    }
+    /**
+     * 启动代理服务器
+     * @returns ProxyCore
+     * @memberOf ProxyCore
+     */
+    async start() {
+        if (this.status !== PROXY_STATUS.INIT) {
+            throw new Error('服务器状态不是PROXY_STATUS_INIT，无法运行start()');
         }
 
-        for (const cltSocketItem of this.requestHandler.cltSockets) {
-          const key = cltSocketItem[0];
-          const cltSocket = cltSocketItem[1];
-          logUtil.printLog(`closing https cltSocket : ${key}`);
-          cltSocket.end();
+        this.socketIndex = 1;
+        this.socketPool = {};
+        try {
+            const self = this;
+            let httpProxyServer;
+            let requestHandler = this.requestHandler;
+            console.log('this.proxyType', this.proxyType);
+            if (this.proxyType === T_TYPE_HTTPS) {
+                let { keyContent, crtContent } = await getCertificatePromise(self.proxyHostName);
+                httpProxyServer = https.createServer({
+                    key: keyContent,
+                    cert: crtContent
+                }, requestHandler.requestHandler);
+            } else {
+                httpProxyServer = http.createServer(requestHandler.requestHandler);
+            }
+            this.httpProxyServer = httpProxyServer;
+            httpProxyServer.on('connect', requestHandler.connectReqHandler);
+
+            // 记住所有socket，以便在调用'close'方法时销毁它们
+            httpProxyServer.on('connection', (socket) => {
+                self.handleExistConnections(socket);
+            });
+            httpProxyServer.listen(this.proxyPort);
+        } catch (error) {
+            logUtil.printLog(chalk.red('启动代理服务器时出错 :('), logUtil.T_ERR);
+            logUtil.printLog(error, logUtil.T_ERR);
+            this.emit('error', { error });
+        }
+
+        const tipText = (this.proxyType === T_TYPE_HTTP ? 'Http' : 'Https') + ' 代理已启动，端口：' + this.proxyPort;
+        logUtil.printLog(chalk.green(tipText));
+        logUtil.printLog(chalk.green(`当前生效的规则是：${await this.proxyRule.summary()}`));
+
+        this.status = PROXY_STATUS.READY;
+        this.emit('ready');
+    }
+
+    async close() {
+
+        if (!this.httpProxyServer) {
+            process.exit();
+            return;
+        }
+
+        for (let socketItem of this.requestHandler.serverSockets) {
+            const [key, serverSocket] = socketItem;
+            logUtil.printLog(`正在销毁https连接：${key}`);
+            serverSocket.end();
+        }
+
+        for (let socketItem of this.requestHandler.clientSockets) {
+            const [key, clientSocket] = socketItem;
+            logUtil.printLog(`正在关闭https客户端socket：${key}`);
+            clientSocket.end();
         }
 
         if (this.requestHandler.httpsServerMgr) {
-          this.requestHandler.httpsServerMgr.close();
+            this.requestHandler.httpsServerMgr.close();
         }
 
         if (this.socketPool) {
-          for (const key in this.socketPool) {
-            this.socketPool[key].destroy();
-          }
+            for (const key in this.socketPool) {
+                this.socketPool[key].destroy();
+            }
         }
 
-        this.httpProxyServer.close((error) => {
-          if (error) {
-            console.error(error);
-            logUtil.printLog(`proxy server close FAILED : ${error.message}`, logUtil.T_ERR);
-          } else {
-            this.httpProxyServer = null;
-
-            this.status = PROXY_STATUS_CLOSED;
-            logUtil.printLog(`proxy server closed at ${this.proxyHostName}:${this.proxyPort}`);
-          }
-          resolve(error);
-        });
-      } else {
-        resolve();
-      }
-    })
-  }
+        await new Promise((resolve, reject) => {
+            this.httpProxyServer.close((error) => {
+                if (error) {
+                    reject(error);
+                    logUtil.printLog(`代理服务器关闭失败：${error.message}`, logUtil.T_ERR);
+                    return;
+                }
+                this.httpProxyServer = null;
+                this.status = PROXY_STATUS.CLOSED;
+                logUtil.printLog(`代理服务器已关闭，地址：${this.proxyHostName}:${this.proxyPort}`);
+                resolve();
+            });
+        })
+        process.exit();
+    }
 }
 
 /**
- * start proxy server as well as recorder and webInterface
+ * 启动代理服务器以及recorder和网页界面
  */
 class ProxyServer extends ProxyCore {
-  /**
-   *
-   * @param {object} config - config
-   * @param {object} [config.webInterface] - config of the web interface
-   * @param {boolean} [config.webInterface.enable=false] - if web interface is enabled
-   * @param {number} [config.webInterface.webPort=8002] - http port of the web interface
-   */
-  constructor(config) {
-    // prepare a recorder
-    const recorder = new Recorder();
-    const configForCore = Object.assign({
-      recorder,
-    }, config);
+    /**
+     *
+     * @param {object} config - 配置
+     * @param {object} [config.webInterface] - 网页界面配置
+     * @param {boolean} [config.webInterface.enable=false] - 是否启用网页界面
+     * @param {number} [config.webInterface.webPort=8002] - 网页界面的http端口
+     */
+    constructor(config) {
+        // 准备一个recorder
+        const recorder = new Recorder();
+        const configForCore = Object.assign({
+            recorder,
+        }, config);
 
-    super(configForCore);
-
-    this.proxyWebinterfaceConfig = config.webInterface;
-    this.recorder = recorder;
-    this.webServerInstance = null;
-  }
-
-  start() {
-    if (this.recorder) {
-      this.recorder.setDbAutoCompact();
+        super(configForCore);
+        this.recorder = recorder;
     }
 
-    // start web interface if neeeded
-    if (this.proxyWebinterfaceConfig && this.proxyWebinterfaceConfig.enable) {
-      this.webServerInstance = new WebInterface(this.proxyWebinterfaceConfig, this.recorder);
-      // start web server
-      this.webServerInstance.start()
-        // start proxy core
-        .then(() => {
-          super.start();
-        })
-        .catch((e) => {
-          this.emit('error', e);
-        });
-    } else {
-      super.start();
-    }
-  }
-
-  close() {
-    const self = this;
-    // release recorder
-    if (self.recorder) {
-      self.recorder.stopDbAutoCompact();
-      self.recorder.clear();
-    }
-    self.recorder = null;
-
-    // close ProxyCore
-    return super.close()
-      // release webInterface
-      .then(() => {
-        if (self.webServerInstance) {
-          const tmpWebServer = self.webServerInstance;
-          self.webServerInstance = null;
-          logUtil.printLog('closing webInterface...');
-          return tmpWebServer.close();
+    start() {
+        if (this.recorder) {
+            this.recorder.setDbAutoCompact();
         }
-      });
-  }
+        super.start();
+    }
+
+    close() {
+        // 释放recorder
+        if (this.recorder) {
+            this.recorder.stopDbAutoCompact();
+            this.recorder.clear();
+        }
+        this.recorder = null;
+        // 关闭ProxyCore
+        return super.close();
+    }
 }
 
 module.exports.ProxyCore = ProxyCore;
 module.exports.ProxyServer = ProxyServer;
-module.exports.ProxyRecorder = Recorder;
-module.exports.ProxyWebServer = WebInterface;
 module.exports.utils = {
-  systemProxyMgr: require('./lib/systemProxyMgr'),
-  certMgr,
+    systemProxyMgr: require('./src/systemProxyMgr'),
+    certMgr,
 };

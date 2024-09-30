@@ -1,45 +1,71 @@
-AnyProxy
-forked from [httpsalibaba/anyproxy](https://github.com/alibaba/anyproxy) v4.1.3
+基于 AnyProxy 进行修改
 ----------------
+
+[httpsalibaba/anyproxy](https://github.com/alibaba/anyproxy) v4.1.3
 
 用了一些代理工具，感觉还是自己写逻辑控制的比较自由。
 
-使用代理进行开发的时候，会发现请求变慢了很多，主要是代理需要实现修改请求体，响应体，所有会把数据都进行接收
-
-本项目增加一些配置，可以支持请求流式，响应流式
+默认不会等待请求体和响应体，流式处理
 
 ## 配置
-
 ```js
+connectDetail = {
+  host, 
+  port, 
+  req
+}
+
+detailInfo = {
+  rawReqInfo: {
+      method: req.method,
+      url: fullUrl,
+      headers: req.headers,
+      body: null,
+  }, //客户端请求信息
+  reqInfo: {
+      method: req.method,
+      url: fullUrl,
+      headers: req.headers,
+  }, //转发远程请求信息
+  rawResInfo: {
+      headers,
+      statusCode,
+      body: null
+  },//远程服务响应信息
+  resInfo: {
+      headers,
+      statusCode,
+      body: null
+  },//响应客户端信息
+  req: req,//客户端请求
+  res: res,//远程服务响应，发送远程请求才有
+  waitReqData: false, //是否等待请求体，默认不等待，流式处理, isWaitReqData修改才有效
+  waitResData: false, //是否等待响应体，默认不等待，流式处理 beforeSendRequest之前修改
+  dangerouslyIgnoreUnauthorized: this.dangerouslyIgnoreUnauthorized
+};
+
+
 {
-    summary: "a rule to hack response",
-    *beforeDealHttpsRequest({ host, _req }) {
-      //return false 不转发（host 域名端口）
-      return true;
-    },
-    *beforeFetchReqData(requestDetail) {
-      //return false 不修改请求内容，默认返回true
-      return false;
+
+    summary: () => 'AnyProxy的默认规则',
+    async isDealHttpsRequest(connectDetail) {
+      //默认都拦截请求，return false 才不拦截
     },
     beforeWsClient(wsReqInfo) {
-      //ws的修改，一般没用，转发主要是 noWsHeaders.origin
-      return wsReqInfo;
+      //与本地代理的server绑定的ws服务，接到浏览器的ws请求
+      //创建一个ws客户端进行转发到目标服务器
+        return wsReqInfo;
     },
-    *beforeSendRequest(requestDetail) {
-      return {
-        _directlyRemoteResponse: true //增加属性，true 使用远程返回内容, false 可以在 beforeSendResponse 中修改
-      };
+    async isWaitReqData(reqInfo, detailInfo) {
+      
     },
-    *beforeSendResponse(requestDetail, responseDetail) {
-      return responseDetail;
+    async beforeSendRequest(reqInfo, detailInfo) {
     },
-  }
+    async beforeSendResponse(resInfo, detailInfo) {
+    },
+}
 ```
 
-增加代码路径配置，可以通过访问代理服务接口[/__anyproxy/user_rule]()，刷新配置
-```
-ruleFilePath: './rule.js',
-```
-
-增加代码路径配置，可以通过访问代理服务接口[/__anyproxy/close]()，关闭服务
+可以通过访问代理服务接口[/__anyproxy/user_rule]()，刷新配置
+可以通过访问代理服务接口[/__anyproxy/close]()，关闭服务
 

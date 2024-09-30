@@ -1,33 +1,23 @@
 /**
-* check if root CA exists and installed
-* will prompt to generate when needed
+* 检查根CA是否存在并已安装
+* 如果需要，将提示生成
 */
 
-const thunkify = require('thunkify');
 const AnyProxy = require('../proxy');
-const logUtil = require('../lib/log');
+const logUtil = require('../src/log');
 
 const certMgr = AnyProxy.utils.certMgr;
 
-function checkRootCAExists() {
-  return certMgr.isRootCAFileExists();
-}
-
-module.exports = function *() {
-  try {
-    if (!checkRootCAExists()) {
-      logUtil.warn('Missing root CA, generating now');
-      yield thunkify(certMgr.generateRootCA)();
-      yield certMgr.trustRootCA();
+module.exports = async () => {
+    if (!certMgr.isRootCAFileExists()) {
+        logUtil.warn('缺少根CA，正在生成');
+        await certMgr.generateRootCA();
+        await certMgr.trustRootCA();
     } else {
-      const isCATrusted = yield thunkify(certMgr.ifRootCATrusted)();
-      if (!isCATrusted) {
-        logUtil.warn('ROOT CA NOT INSTALLED YET');
-        yield certMgr.trustRootCA();
-      }
+        const isCATrusted = await certMgr.ifRootCATrustedPromise();
+        if (!isCATrusted) {
+            logUtil.warn('根CA尚未安装');
+            await certMgr.trustRootCA();
+        }
     }
-  } catch (e) {
-    console.error(e);
-  }
 };
-

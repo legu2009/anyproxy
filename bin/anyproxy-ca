@@ -2,99 +2,82 @@
 
 'use strict'
 
-// exist-false, trusted-false : create CA
-// exist-true,  trusted-false : trust CA
-// exist-true,  trusted-true  : all things done
-const program = require('commander');
-const color = require('colorful');
-const certMgr = require('../lib/certMgr');
-const AnyProxy = require('../proxy');
+const { program } = require('commander');
+const chalk = require('chalk');
+const certMgr = require('../src/certMgr');
 const exec = require('child_process').exec;
-const co = require('co');
 const path = require('path');
-const inquirer = require('inquirer');
-
-program
-  .option('-c, --clear', 'clear all the tmp certificates and root CA')
-  .option('-g, --generate', 'generate a new rootCA')
-  .parse(process.argv);
-
+const inquirer = require('inquirer').default;
 function openFolderOfFile(filePath) {
-  const platform = process.platform;
-  if (/^win/.test(platform)) {
-    exec('start .', { cwd: path.dirname(filePath) });
-  } else if (/darwin/.test(platform)) {
-    exec(`open -R ${filePath}`);
-  }
-}
-
-function guideToGenrateCA() {
-  AnyProxy.utils.certMgr.generateRootCA((error, keyPath, crtPath) => {
-    if (!error) {
-      const certDir = path.dirname(keyPath);
-      console.log(`The cert is generated at ${certDir}. Please trust the ${color.bold('rootCA.crt')}.`);
-      openFolderOfFile(crtPath);
-    } else {
-      console.error('failed to generate rootCA', error);
+    const platform = process.platform;
+    if (/^win/.test(platform)) {
+        exec('start .', { cwd: path.dirname(filePath) });
+    } else if (/darwin/.test(platform)) {
+        exec(`open -R ${filePath}`);
     }
-  });
 }
 
 function guideToTrustCA() {
-  const certPath = AnyProxy.utils.certMgr.getRootCAFilePath();
-  if (certPath) {
-    openFolderOfFile(certPath);
-  } else {
-    console.error('failed to get cert path');
-  }
+    const certPath = certMgr.getRootCAFilePath();
+    if (certPath) {
+        openFolderOfFile(certPath);
+    } else {
+        console.error('获取证书路径失败');
+    }
 }
 
-if (program.clear) {
-  AnyProxy.utils.certMgr.clearCerts(() => {
-    console.log(color.green('done !'));
-  });
-} else if (program.generate) {
-  guideToGenrateCA();
-} else {
-  console.log('detecting CA status...');
-  co(certMgr.getCAStatus)
-    .then(status => {
-      if (!status.exist) {
-        console.log('AnyProxy CA does not exist.');
-        const questions = [{
-          type: 'confirm',
-          name: 'ifCreate',
-          message: 'Would you like to generate one ?',
-          default: true
-        }];
-        inquirer.prompt(questions).then(answers => {
-          if (answers.ifCreate) {
-            guideToGenrateCA();
-          }
-        });
-      } else if (!status.trusted) {
-        if (/^win/.test(process.platform)) {
-          console.log('AnyProxy CA exists, make sure it has been trusted');
-        } else {
-          console.log('AnyProxy CA exists, but not be trusted');
-          const questions = [{
-            type: 'confirm',
-            name: 'ifGotoTrust',
-            message: 'Would you like to open the folder and trust it ?',
-            default: true
-          }];
-          inquirer.prompt(questions).then(answers => {
-            if (answers.ifGotoTrust) {
-              guideToTrustCA();
+async function main() {
+    program
+        .option('-c, --clear', '清除所有临时证书和根CA')
+        .option('-g, --generate', '生成新的根CA')
+        .parse(process.argv);
+
+    const options = program.opts();
+    if (options.clear) {
+        await certMgr.clearCerts();
+        console.log(chalk.green('清除完成！'));
+    } else if (options.generate) {
+        certMgr.generateRootCA();
+    } else {
+        console.log('正在检测CA状态...');
+        let status = await certMgr.getCAStatus();
+        if (!status.exist) {
+            console.log('AnyProxy CA不存在。');
+            let answers = await inquirer.prompt([{
+                type: 'confirm',
+                name: 'ifCreate',
+                message: '是否要生成一个？',
+                default: true
+            }])
+            if (answers.ifCreate) {
+                certMgr.generateRootCA();
             }
-          });
+            return;
         }
-        // AnyProxy.utils.certMgr.clearCerts()
-      } else {
-        console.log(color.green('AnyProxy CA has already been trusted'));
-      }
-    })
-    .catch(e => {
-      console.log(e);
-    })
+        if (!status.trusted) {
+            if (/^win/.test(process.platform)) {
+                console.log('AnyProxy CA已存在，请确保它已被信任');
+            } else {
+                console.log('AnyProxy CA已存在，但未被信任');
+                let answers = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'ifGotoTrust',
+                    message: '是否要打开文件夹并信任它？',
+                    default: true
+                }]);
+                if (answers.ifGotoTrust) {
+                    guideToTrustCA();
+                }
+            }
+            return;
+        }
+        console.log(chalk.green('AnyProxy CA已被信任'));
+    }
 }
+
+try {
+    main();
+} catch (e) {
+    console.error(e);
+}
+
