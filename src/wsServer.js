@@ -10,7 +10,7 @@ function createWsServer(config) {
         server: config.server
     });
 
-    wss.on('connection', config.connHandler);
+    wss.on('connection', config.connectionListener);
 
     wss.on('headers', headers => {
         headers.push('x-anyproxy-websocket:true');

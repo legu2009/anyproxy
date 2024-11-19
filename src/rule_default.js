@@ -3,10 +3,15 @@
 module.exports = {
 
     summary: () => 'AnyProxy的默认规则',
-    async isDealHttpsRequest(connectDetail) {
+
+    beforeWsClient(wsReqInfo) {
 
     },
-    beforeWsClient(wsReqInfo) {
+    
+    async isDealConnect(connectDetail) {
+
+    },
+    async isDealRequest(reqInfo, detailInfo) {
 
     },
     async isWaitReqData(reqInfo, detailInfo) {
@@ -18,7 +23,10 @@ module.exports = {
     onError(error, detailInfo) {
         
     },
-    onConnectError(error, detailInfo) {
+    onConnectError(error, connectDetail) {
+        
+    },
+    onClientSocketError(error, connectDetail) {
         
     },
 };

@@ -48,13 +48,15 @@ detailInfo = {
 {
 
     summary: () => 'AnyProxy的默认规则',
-    async isDealHttpsRequest(connectDetail) {
-      //默认都拦截请求，return false 才不拦截
-    },
+    
     beforeWsClient(wsReqInfo) {
-      //与本地代理的server绑定的ws服务，接到浏览器的ws请求
-      //创建一个ws客户端进行转发到目标服务器
-        return wsReqInfo;
+
+    },
+    async isDealConnect(connectDetail) { //https才会触发 connect请求
+
+    },
+    async isDealRequest(reqInfo, detailInfo) {
+      //默认都拦截请求，return false 才不拦截
     },
     async isWaitReqData(reqInfo, detailInfo) {
       

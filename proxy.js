@@ -12,7 +12,7 @@ const Recorder = require('./src/recorder');
 const RequestHandler = require('./src/requestHandler');
 const { ThrottleGroup } = require('stream-throttle');
 const default_rule = require('./src/rule_default');
-
+const { createWsServer } = require('./src/wsServer');
 
 const T_TYPE_HTTP = 'http';
 const T_TYPE_HTTPS = 'https';
@@ -23,6 +23,9 @@ const PROXY_STATUS = {
     READY: 'READY',
     CLOSED: 'CLOSED'
 };
+
+
+
 /**
  * 代理核心类
  */
@@ -30,6 +33,9 @@ class ProxyCore extends events.EventEmitter {
 
     constructor(config = {}) {
         super();
+        this.socketPool = {};
+        this.socketIndex = 1;
+        this.connectionListener = this.connectionListener.bind(this);
         this.initConfig(config);
         this.initComponents(config);
     }
@@ -42,7 +48,6 @@ class ProxyCore extends events.EventEmitter {
         this.proxyPort = config.port;
         this.proxyType = /https/i.test(config.type || DEFAULT_TYPE) ? T_TYPE_HTTPS : T_TYPE_HTTP;
         this.proxyHostName = config.hostname || 'localhost';
-        this.recorder = config.recorder;
         this.validateConfig(config);
     }
 
@@ -60,10 +65,6 @@ class ProxyCore extends events.EventEmitter {
         if (!this.proxyPort) {
             throw new Error('需要指定代理端口');
         }
-        if (!this.recorder) {
-            throw new Error('需要指定recorder');
-        }
-
     }
 
     /**
@@ -76,7 +77,10 @@ class ProxyCore extends events.EventEmitter {
         this.recorder = config.recorder;
         this.initProxyRule(config);
         this.initThrottle(config);
-        this.initRequestHandler(config);
+        this.requestHandler = new RequestHandler({
+            httpServerPort: config.port,
+            dangerouslyIgnoreUnauthorized: !!config.dangerouslyIgnoreUnauthorized
+        }, this);
     }
 
     /**
@@ -115,17 +119,6 @@ class ProxyCore extends events.EventEmitter {
     }
 
     /**
-     * 初始化请求处理器
-     */
-    initRequestHandler(config) {
-        this.requestHandler = new RequestHandler({
-            wsIntercept: config.wsIntercept,
-            httpServerPort: config.port,
-            dangerouslyIgnoreUnauthorized: !!config.dangerouslyIgnoreUnauthorized
-        }, this);
-    }
-
-    /**
     * 管理所有创建的socket
     * 对于每个新socket，我们将其放入一个map中；
     * 如果socket自行关闭，我们从map中移除它
@@ -135,10 +128,9 @@ class ProxyCore extends events.EventEmitter {
     * @returns undefined
     * @memberOf ProxyCore
     */
-    handleExistConnections(socket) {
+    connectionListener(socket) {
         const key = `socketIndex_${this.socketIndex++}`;
         this.socketPool[key] = socket;
-        // 如果socket已关闭，从池中移除
         socket.on('close', () => {
             delete this.socketPool[key];
         });
@@ -153,34 +145,31 @@ class ProxyCore extends events.EventEmitter {
             throw new Error('服务器状态不是PROXY_STATUS_INIT，无法运行start()');
         }
 
-        this.socketIndex = 1;
         this.socketPool = {};
         try {
-            const self = this;
             let httpProxyServer;
             let requestHandler = this.requestHandler;
-            console.log('this.proxyType', this.proxyType);
             if (this.proxyType === T_TYPE_HTTPS) {
-                let { keyContent, crtContent } = await getCertificatePromise(self.proxyHostName);
-                httpProxyServer = https.createServer({
-                    key: keyContent,
-                    cert: crtContent
-                }, requestHandler.requestHandler);
+                const { key, cert } = await certMgr.getCertificatePromise(this.proxyHostName);
+                httpProxyServer = https.createServer({ key, cert }, requestHandler.requestListener);
             } else {
-                httpProxyServer = http.createServer(requestHandler.requestHandler);
+                httpProxyServer = http.createServer(requestHandler.requestListener);
             }
             this.httpProxyServer = httpProxyServer;
-            httpProxyServer.on('connect', requestHandler.connectReqHandler);
+            createWsServer({
+                server: httpProxyServer,
+                connectionListener: requestHandler.connectionListener
+            });
+            httpProxyServer.on('connect', requestHandler.connectListener);
 
             // 记住所有socket，以便在调用'close'方法时销毁它们
-            httpProxyServer.on('connection', (socket) => {
-                self.handleExistConnections(socket);
-            });
+            httpProxyServer.on('connection', this.connectionListener);
             httpProxyServer.listen(this.proxyPort);
         } catch (error) {
             logUtil.printLog(chalk.red('启动代理服务器时出错 :('), logUtil.T_ERR);
             logUtil.printLog(error, logUtil.T_ERR);
             this.emit('error', { error });
+            return;
         }
 
         const tipText = (this.proxyType === T_TYPE_HTTP ? 'Http' : 'Https') + ' 代理已启动，端口：' + this.proxyPort;
@@ -192,32 +181,14 @@ class ProxyCore extends events.EventEmitter {
     }
 
     async close() {
-
         if (!this.httpProxyServer) {
             process.exit();
             return;
         }
-
-        for (let socketItem of this.requestHandler.serverSockets) {
-            const [key, serverSocket] = socketItem;
-            logUtil.printLog(`正在销毁https连接：${key}`);
-            serverSocket.end();
-        }
-
-        for (let socketItem of this.requestHandler.clientSockets) {
-            const [key, clientSocket] = socketItem;
-            logUtil.printLog(`正在关闭https客户端socket：${key}`);
-            clientSocket.end();
-        }
-
-        if (this.requestHandler.httpsServerMgr) {
-            this.requestHandler.httpsServerMgr.close();
-        }
-
-        if (this.socketPool) {
-            for (const key in this.socketPool) {
-                this.socketPool[key].destroy();
-            }
+        let { requestHandler } = this;
+        requestHandler.close();
+        for (let key in this.socketPool) {
+            this.socketPool[key].destroy();
         }
 
         await new Promise((resolve, reject) => {
@@ -250,32 +221,16 @@ class ProxyServer extends ProxyCore {
      */
     constructor(config) {
         // 准备一个recorder
+        super(config);
         const recorder = new Recorder();
-        const configForCore = Object.assign({
-            recorder,
-        }, config);
-
-        super(configForCore);
         this.recorder = recorder;
     }
 
-    start() {
-        if (this.recorder) {
-            this.recorder.setDbAutoCompact();
-        }
+    async start() {
+        await this.recorder.start();
         super.start();
     }
 
-    close() {
-        // 释放recorder
-        if (this.recorder) {
-            this.recorder.stopDbAutoCompact();
-            this.recorder.clear();
-        }
-        this.recorder = null;
-        // 关闭ProxyCore
-        return super.close();
-    }
 }
 
 module.exports.ProxyCore = ProxyCore;

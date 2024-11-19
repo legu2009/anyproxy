@@ -5,6 +5,8 @@ const path = require('path');
 const child_process = require('child_process');
 const os = require('os');
 const Buffer = require('buffer').Buffer;
+const brotliTorb = require('brotli');
+const zlib = require('zlib');
 
 const util = {
 
@@ -81,7 +83,7 @@ const util = {
     },
 
 
-    deleteFolderContentsRecursive(dirPath, ifClearFolderItself) {
+    deleteFolderContentsRecursive(dirPath, ifClearFolderItself, execute = (curPath) => false) {
         if (!dirPath.trim() || dirPath === '/') {
             throw new Error('无法删除此目录');
         }
@@ -89,8 +91,9 @@ const util = {
         if (fs.existsSync(dirPath)) {
             fs.readdirSync(dirPath).forEach((file) => {
                 const curPath = path.join(dirPath, file);
+                if (execute(curPath)) return;
                 if (fs.lstatSync(curPath).isDirectory()) {
-                    this.deleteFolderContentsRecursive(curPath, true);
+                    this.deleteFolderContentsRecursive(curPath, true, execute);
                 } else {
                     fs.unlinkSync(curPath);
                 }
@@ -177,6 +180,69 @@ const util = {
             status
         };
     },
+    decodingResBody(buffer, headers) {
+        return new Promise((resolve, reject) => {
+            const contentLen = util.getByteSize(buffer);
+            // 处理内容编码
+            const contentEncoding = headers['content-encoding'] || headers['Content-Encoding'];
+            const ifServerGzipped = /gzip/i.test(contentEncoding);
+            const isServerDeflated = /deflate/i.test(contentEncoding);
+            const isBrotlied = /br/i.test(contentEncoding);
+            // 更新头部内容编码
+            const refactContentEncoding = () => {
+                if (contentEncoding) {
+                    headers['x-anyproxy-origin-content-encoding'] = contentEncoding;
+                    delete headers['content-encoding'];
+                    delete headers['Content-Encoding'];
+                }
+            };
+
+            // 设置原始内容长度
+            headers['x-anyproxy-origin-content-length'] = contentLen;
+            // 解压响应数据
+            if (ifServerGzipped && contentLen) {
+                refactContentEncoding();
+                zlib.gunzip(buffer, (err, buff) => {
+                    err ? reject(err) : resolve(buff);
+                });
+            } else if (isServerDeflated && contentLen) {
+                refactContentEncoding();
+                zlib.inflate(buffer, (err, buff) => {
+                    err ? reject(err) : resolve(buff);
+                });
+            } else if (isBrotlied && contentLen) {
+                refactContentEncoding();
+                try {
+                    let _buffer = Buffer.from(brotliTorb.decompress(buffer))
+                    resolve(_buffer);
+                } catch (e) {
+                    resolve(buffer);
+                }
+            } else {
+                resolve(buffer);
+            }
+        });
+    },
+    decodingResBody2(buffer, headers) {
+        return new Promise((resolve, reject) => {
+            const contentLen = util.getByteSize(buffer);
+            const contentEncoding = headers['content-encoding'] || headers['Content-Encoding'];
+            const ifServerGzipped = /gzip/i.test(contentEncoding);
+            const isServerDeflated = /deflate/i.test(contentEncoding);
+
+            if (ifServerGzipped && contentLen) {
+                zlib.gunzip(buffer, (err, buff) => {
+                    err ? reject(err) : resolve(buff);
+                });
+            } else if (isServerDeflated && contentLen) {
+                zlib.inflate(buffer, (err, buff) => {
+                    err ? reject(err) : resolve(buff);
+                });
+            } else {
+                resolve(buffer);
+            }
+        });
+    }
 };
 
 Object.assign(module.exports, util);

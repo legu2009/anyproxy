@@ -61,8 +61,6 @@ crtMgr.getCAStatus = async () => {
 crtMgr.trustRootCA = async () => {
     const platform = os.platform();
     const rootCAPath = crtMgr.getRootCAFilePath();
-    console.log(platform);
-
     if (platform === 'darwin') {
         const answers = await inquirer.prompt([
             {
@@ -94,11 +92,11 @@ crtMgr.trustRootCA = async () => {
 
 crtMgr.getCertificatePromise = (host) => {
     return new Promise((resolve, reject) => {
-        crtMgr.getCertificate(host, (err, keyContent, crtContent) => {
+        crtMgr.getCertificate(host, (err, key, cert) => {
             if (err) {
                 reject(err);
             } else {
-                resolve({ keyContent, crtContent })
+                resolve({ key, cert })
             }
         });
     })
