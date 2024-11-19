@@ -6,30 +6,10 @@ const duckdb = require('duckdb');
 
 const path = require('path');
 const fs = require('fs');
-const logUtil = require('./log');
 const events = require('events');
-const iconv = require('iconv-lite');
-const fastJson = require('fast-json-stringify');
 const proxyUtil = require('./util');
 const dayjs = require('dayjs');
 
-//CREATE TABLE t1 (id INTEGER PRIMARY KEY, j VARCHAR);
-
-const wsMessageStingify = fastJson({
-    title: 'ws消息字符串化',
-    type: 'object',
-    properties: {
-        time: {
-            type: 'integer'
-        },
-        message: {
-            type: 'string'
-        },
-        isToServer: {
-            type: 'boolean'
-        }
-    }
-});
 
 const CACHE_DIR_PREFIX = 'cache_r';
 
@@ -138,28 +118,36 @@ class Recorder extends events.EventEmitter {
         }), clientStartTime, rawReqInfo.method);
     }
 
-    async updateUserReq(detailInfo) {
+    async updateUserReq(detailInfo, useRawReq) {
         detailInfo.proxyStartTime = +Date.now();
-        const { reqInfo, resInfo, _recorderId, proxyStartTime } = detailInfo;
+        const { reqInfo, resInfo, _recorderId, proxyStartTime, rawReqInfo } = detailInfo;
         let body = resInfo.body;
         if (typeof body === 'string') {
             body = Buffer.from(body);
         }
         await this.all(`UPDATE log SET 
-            reqUrl = ?::VARCHAR, reqBody = ?::VARCHAR, reqInfo = ?::JSON, proxyStartTime = ?::BIGINT WHERE id  = ?::INTEGER`,
+            reqBody = ?::VARCHAR,
+            reqUrl = ?::VARCHAR, 
+            reqInfo = ?::JSON, 
+            proxyStartTime = ?::BIGINT 
+            WHERE id  = ?::INTEGER`,
+            !useRawReq && body ? body.toString('base64') : null,
             reqInfo.url,
-            body ? body.toString('base64') : null,
             JSON.stringify({
                 method: reqInfo.method,
                 url: reqInfo.url,
                 headers: reqInfo.headers,
-            }), proxyStartTime, _recorderId);
+            }),
+            proxyStartTime,
+            _recorderId
+        );
     }
 
     async updateRawReqBody(detailInfo) {
         const { rawReqInfo, _recorderId } = detailInfo;
         await this.all(`UPDATE log SET rawReqBody = ?::VARCHAR WHERE id  = ?::INTEGER`, rawReqInfo.body.toString('base64'), _recorderId);
     }
+
     async updateRawResBody(detailInfo) {
         const { rawResInfo, _recorderId } = detailInfo;
         await this.all(`UPDATE log SET rawResBody = ?::VARCHAR WHERE id  = ?::INTEGER`, rawResInfo.body ? rawResInfo.body.toString('base64') : null, _recorderId);
@@ -175,11 +163,12 @@ class Recorder extends events.EventEmitter {
 
         await this.all(`UPDATE log SET 
             clientEndTimeEnd = ?::BIGINT, waitReqData = ?::BOOLEAN, waitResData = ?::BOOLEAN, dealRequest = ?::BOOLEAN,
-            resBodySize = ?::INTEGER, resBody = ?::VARCHAR
+            resBodySize = ?::INTEGER, 
+            resBody = ?::VARCHAR
             WHERE id  = ?::INTEGER`,
             clientEndTimeEnd, waitReqData, waitResData, dealRequest,
             body ? Buffer.byteLength(body) / 1024 >> 0 : null,
-            body ? body.toString('base64') : null,
+            !useRawRes && body ? body.toString('base64') : null,
             _recorderId
         );
     }

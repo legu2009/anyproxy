@@ -31,25 +31,6 @@ class ReadableStream extends Readable {
     }
 }
 
-class BodyTransform extends Transform {
-    constructor(callback) {
-        super();
-        this.callback = callback;
-        this.cache = [];
-    }
-
-    _transform(chunk, encoding, callback) {
-        this.cache.push(chunk);
-        this.push(chunk);
-        callback();
-    }
-
-    _flush(callback) {
-        this.callback(Buffer.concat(this.cache));
-        callback();
-    }
-
-}
 
 /*
 * 获取异常场景的错误响应
@@ -126,12 +107,14 @@ async function fetchRemoteResponse(detailInfo, ctx) {
         );
 
         proxyReq.on('error', reject);
+        let useRawReq = false;
         if (!waitReqData && reqInfo.body === undefined) {
+            useRawReq = true;
             detailInfo.req.pipe(proxyReq);
         } else {
             proxyReq.end(reqInfo.body);
         }
-        ctx.recorder.updateUserReq(detailInfo);
+        ctx.recorder.updateUserReq(detailInfo, useRawReq);
     });
 
     const { waitResData } = detailInfo;
@@ -412,7 +395,7 @@ function sendFinalResponse(detailInfo, rawRes, ctx) {
         useRawRes = true;
         rawRes.writeHead(resInfo.statusCode, resInfo.headers);
         res.pipe(rawRes);
-        ctx.recorder.updateUserRes(detailInfo, true);
+        ctx.recorder.updateUserRes(detailInfo, useRawRes);
         return;
     }
 
@@ -437,6 +420,7 @@ function sendFinalResponse(detailInfo, rawRes, ctx) {
             headers['Content-Length'] = util.getByteSize(resInfo.body);
         }
     }
+
     rawRes.writeHead(resInfo.statusCode, headers);
     if (ctx._throttle) {
         if (useRawRes) {
@@ -454,7 +438,7 @@ function sendFinalResponse(detailInfo, rawRes, ctx) {
             rawRes.end(resInfo.body);
         }
     }
-    ctx.recorder.updateUserRes(detailInfo);
+    ctx.recorder.updateUserRes(detailInfo, useRawRes);
 }
 
 async function _connectListener(req, clientSocket, head) {

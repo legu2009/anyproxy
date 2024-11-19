@@ -92,12 +92,13 @@ class Store {
                 proxyCode += key.padEnd(max) + ':' + proxyHeaders[key] + '\n';
             });
         }
+
         addCode(rawReqInfo.headers, reqInfo.headers);
 
-        clientCode += ''.padEnd(60, '-') + '\n' + resInfo.statusCode + '\n';
-        proxyCode += ''.padEnd(60, '-') + '\n' + rawResInfo.statusCode + '\n';
+        clientCode += ''.padEnd(60, '-') + '\n' + ''.padEnd(60, '-') + '\n' + resInfo.statusCode + '\n';
+        proxyCode += ''.padEnd(60, '-') + '\n' + ''.padEnd(60, '-') + '\n' + (rawResInfo?.statusCode || 'unknown proxy error') + '\n';
 
-        addCode(resInfo.headers, rawResInfo.headers);
+        addCode(resInfo.headers, rawResInfo?.headers || {});
 
         return { clientCode, proxyCode }
     }
@@ -210,11 +211,13 @@ theme.internalTheme.obj.bodyStyle.fontSize = 12;
 const LogDiffEditor = observer(function ({ store }) {
     const { showLogInfo } = store;
     let { clientCode, proxyCode } = store.getReqCode();
-    const options = {
-        //renderSideBySide: false
-    };
-
-    return  
+    return <DiffEditor
+        width="100%"
+        height="100%"
+        original={clientCode}
+        modified={proxyCode}
+        options={{ renderSideBySide: false }}
+    />
 })
 const LogTable = observer(function ({ store }) {
     const { records: _records, recordMap } = store;
